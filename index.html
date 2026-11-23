@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>ワードッチ！オンライン</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase SDK (Compat版・シングルファイル向け) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
+      background-color: #f0f4f8;
+      overscroll-behavior-y: none;
+    }
+    .chat-scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+    .chat-scroll::-webkit-scrollbar-thumb {
+      background-color: #cbd5e1;
+      border-radius: 3px;
+    }
+    @keyframes popIn {
+      0% { transform: scale(0.95); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .animate-pop {
+      animation: popIn 0.2s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="h-[100dvh] flex flex-col text-slate-800 select-none">
+
+  <!-- ==================== ロビー画面 ==================== -->
+  <div id="lobby-screen" class="flex-1 flex flex-col items-center justify-center p-4">
+    <div class="w-full max-w-md bg-white rounded-3xl shadow-xl p-6 space-y-6 border border-slate-100">
+      <div class="text-center space-y-1">
+        <span class="inline-block bg-amber-100 text-amber-800 text-xs font-bold px-3 py-1 rounded-full">2択の選び方でお題を当てろ！</span>
+        <h1 class="text-3xl font-black tracking-tight text-slate-800">ワードッチ！</h1>
+        <p class="text-xs text-slate-500">4桁のルームIDでみんなとチャット対戦</p>
+      </div>
+
+      <!-- 前回の部屋への復帰バナー -->
+      <div id="resume-banner" class="hidden bg-indigo-50 border border-indigo-200 rounded-2xl p-4 space-y-2">
+        <p class="text-xs font-bold text-indigo-800">🔄 前回のルームが見つかりました</p>
+        <p id="resume-info" class="text-sm text-indigo-900 font-medium"></p>
+        <div class="flex gap-2 pt-1">
+          <button onclick="resumeRoom()" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-sm shadow transition">
+            続きから復帰する
+          </button>
+          <button onclick="clearSavedSession()" class="px-3 py-2.5 bg-white text-slate-500 hover:text-slate-700 border border-slate-200 rounded-xl text-xs font-bold">
+            破棄
+          </button>
+        </div>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-bold text-slate-600 mb-1">あなたのニックネーム</label>
+          <input id="input-name" type="text" maxlength="10" placeholder="例：みーたま"
+            class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-400 font-bold text-base select-text" />
+        </div>
+
+        <div class="pt-2 border-t border-slate-100 space-y-3">
+          <button onclick="createRoom()" class="w-full bg-amber-400 hover:bg-amber-500 active:scale-[0.99] text-slate-900 font-black py-3.5 rounded-2xl shadow-md transition text-base">
+            ✨ 新しく部屋をつくる（4桁ID発行）
+          </button>
+
+          <div class="relative flex py-1 items-center">
+            <div class="flex-grow border-t border-slate-200"></div>
+            <span class="flex-shrink mx-3 text-xs text-slate-400 font-bold">またはIDを入れて参加</span>
+            <div class="flex-grow border-t border-slate-200"></div>
+          </div>
+
+          <div class="flex gap-2">
+            <input id="input-room-id" type="tel" inputmode="numeric" maxlength="4" placeholder="4桁の数字"
+              class="w-1/2 px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400 font-black text-center text-lg tracking-widest select-text" />
+            <button onclick="joinRoom()" class="w-1/2 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-bold py-3 rounded-xl shadow transition text-base">
+              入室する
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== ゲーム画面 ==================== -->
+  <div id="game-screen" class="hidden flex-1 flex flex-col h-[100dvh] max-w-xl mx-auto w-full bg-white shadow-2xl overflow-hidden">
+    
+    <!-- ヘッダー -->
+    <header class="bg-slate-800 text-white px-4 py-2.5 flex items-center justify-between shrink-0 z-10">
+      <div class="flex items-center gap-2">
+        <span class="bg-amber-400 text-slate-900 font-black text-xs px-2 py-0.5 rounded">ID</span>
+        <span id="header-room-id" class="font-black text-xl tracking-widest font-mono">0000</span>
+        <button onclick="copyRoomId()" class="text-[11px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-200">
+          コピー
+        </button>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="header-player-count" class="text-xs bg-slate-700 px-2.5 py-1 rounded-full font-bold">👥 1人</span>
+        <button onclick="leaveRoom()" class="text-xs text-slate-300 hover:text-white underline ml-1">退室</button>
+      </div>
+    </header>
+
+    <!-- 参加者リストバー -->
+    <div id="players-bar" class="bg-slate-100 px-3 py-1.5 flex items-center gap-1.5 overflow-x-auto shrink-0 border-b border-slate-200 text-xs">
+      <!-- JSで描画 -->
+    </div>
+
+    <!-- 現在のステータス・暫定1位・親のお題エリア -->
+    <div id="status-panel" class="bg-gradient-to-b from-amber-50 to-white border-b border-amber-200 px-4 py-3 shrink-0 space-y-2 shadow-sm z-10">
+      <!-- JSで動的に描画 -->
+    </div>
+
+    <!-- チャットタイムライン -->
+    <main id="chat-container" class="flex-1 overflow-y-auto p-4 space-y-3 bg-[#e8eef5] chat-scroll">
+      <!-- JSでメッセージ描画 -->
+    </main>
+
+    <!-- 下部アクション・入力エリア -->
+    <footer id="bottom-panel" class="bg-white border-t border-slate-200 p-3 shrink-0 z-10">
+      <!-- JSでフェイズと役割に応じたUIを描画 -->
+    </footer>
+  </div>
+
+  <script>
+    // =========================================================================
+    // Firebase 設定（wordjji）
+    // =========================================================================
+    const firebaseConfig = {
+      apiKey: "AIzaSyCj0d6jXBYRzqdia72J0aFWqCJbokaM9ws",
+      authDomain: "wordjji.firebaseapp.com",
+      databaseURL: "https://wordjji-default-rtdb.firebaseio.com",
+      projectId: "wordjji",
+      storageBucket: "wordjji.firebasestorage.app",
+      messagingSenderId: "1050557061464",
+      appId: "1:1050557061464:web:497b2c21d2d9f90177ed2d"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // =========================================================================
+    // お題（基準50個）＆初期ワード（30セット）データ
+    // =========================================================================
+    const CRITERIA_LIST = [
+      "無人島に1つだけ持っていくなら一番頼りになりそうなもの",
+      "桃太郎のきびだんごの代わりにあげたら、一番強い鬼が仲間になりそうなもの",
+      "ラスボスが戦闘前に「フフフ…私にはまだ〇〇がある」と言ったら絶望するもの",
+      "朝起きたら枕元に置いてあったら一番怖いもの",
+      "授業参観でお母さんがカバンから取り出したら気まずいもの",
+      "警察の職務質問でカバンから出てきたら一番言い訳が難しいもの",
+      "銭湯のロッカーの鍵の代わりに渡されたら困惑するもの",
+      "ゾンビ映画で一番最初に噛まれそうな人の特徴・アイテム",
+      "タイムカプセルから30年後に出てきたら一番ガッカリするもの",
+      "結婚式の新郎新婦の共同作業で、ケーキ入刀の代わりにやったら盛り上がりそうなこと",
+      "魔法のランプの魔人に「3つ願いを叶えよう」と言われて1つ目に頼むと呆れられること",
+      "居酒屋の「お通し」で出てきたら二度と行かないと思うもの",
+      "異世界転生したときの「チート能力」だったら一番ハズレなもの",
+      "高級フレンチのフルコースの最後に「シェフの気まぐれ」として出てきたら笑うもの",
+      "悪の組織の秘密基地のパスワードになっていたらダサい言葉",
+      "「強そう」な響きの言葉",
+      "触ったらめちゃくちゃ冷たそうなもの",
+      "見た目だけで「絶対に高い」と思わせるもの",
+      "100年後には教科書に載っていそうな言葉",
+      "落としたときの音が一番デカそうなもの",
+      "すごく「いい匂い」がしそうな言葉",
+      "1日中ずっと眺めていても飽きなさそうなもの",
+      "名前だけで「絶対に美味しい」と確信できるもの",
+      "めちゃくちゃ「足が速そう」なもの",
+      "部屋に1つ置いてあるだけで「この人オシャレだな」と思われるもの",
+      "なんとなく「丸っこい」イメージがする言葉",
+      "すごく「壊れやすそう」なもの",
+      "名前を呼ぶときにちょっと小声になってしまうもの",
+      "「夏休み」を一番強く連想させるもの",
+      "実は裏で世界を操っていそうな黒幕感があるもの",
+      "声に出して読みたい日本語（口に出すと気持ちいい言葉）",
+      "漢字で書いたらめちゃくちゃ画数が多そうな言葉",
+      "外国人に意味を説明するのに一番苦労しそうな言葉",
+      "早口言葉にしたら一番噛みそうな言葉",
+      "全部ひらがなで書くと急にマヌケに見える言葉",
+      "必殺技の名前みたいに叫ぶとカッコいい言葉",
+      "赤ちゃんが最初に喋ったら天才だと思う言葉",
+      "辞書で引いたときの説明文がめちゃくちゃ短そうな言葉",
+      "猫の名前につけたら一番しっくりくるもの",
+      "演歌のタイトルにありそうな言葉",
+      "もしも空から降ってきたら一番被害が大きそうなもの",
+      "100匹集まったら一番面倒くさそうなもの",
+      "透明人間が持っていたら意味がないもの",
+      "冷蔵庫の奥から賞味期限切れで出てきそうなもの",
+      "自分の体の一部と交換できるならちょっと迷うもの",
+      "夢の中で追いかけられたら一番嫌なもの",
+      "実は「食べようと思えば食べられる」気がする限界のもの",
+      "コンビニのレジ横でホットスナックと一緒に売られていたらつい買っちゃうもの",
+      "1000円札の肖像画になっていたら違和感があるもの",
+      "自分の葬式で流してほしいBGMのタイトルっぽい言葉"
+    ];
+
+    const WORD_SETS = [
+      ["トロイの木馬", "丸まった鉛筆", "メンマ"],
+      ["冷蔵庫", "織田信長", "綿あめ"],
+      ["救急車", "濡れた雑巾", "ダイヤモンド"],
+      ["富士山", "輪ゴム", "透明人間"],
+      ["回転寿司", "筋肉痛", "宇宙飛行士"],
+      ["扇風機", "ドラキュラ", "納豆"],
+      ["体育館の裏", "割り箸", "ピカソ"],
+      ["観覧車", "蚊取り線香", "ラスボス"],
+      ["幼稚園児", "カブトムシ", "エレベーター"],
+      ["流れ星", "湿布", "銀行強盗"],
+      ["お風呂の栓", "恐竜", "アイドル"],
+      ["砂時計", "ぎっくり腰", "遊園地"],
+      ["電気ウナギ", "卒業アルバム", "唐揚げ"],
+      ["信号機", "忍者", "羽毛布団"],
+      ["自動販売機", "幽霊", "バナナの皮"],
+      ["地球儀", "しゃっくり", "消防士"],
+      ["洗濯バサミ", "ピラミッド", "メロンソーダ"],
+      ["保健室のベッド", "タイムマシン", "タコ焼き"],
+      ["ジェットコースター", "爪切り", "サンタクロース"],
+      ["消しゴムのカス", "豪華客船", "ゴリラ"],
+      ["満員電車", "ひまわり", "魔法使い"],
+      ["校長先生の話", "流れ作業", "カレーライス"],
+      ["踏切", "ぬいぐるみ", "サボテン"],
+      ["Wi-Fi", "おじいちゃんの知恵袋", "ジェット機"],
+      ["蚊帳（かや）", "ボーリングの球", "初恋"],
+      ["コインランドリー", "ライオン", "折り紙"],
+      ["図書館", "雷（かみなり）", "プリン"],
+      ["マンホール", "探偵", "マフラー"],
+      ["盆栽", "新幹線", "シャボン玉"],
+      ["秘密基地", "ヨーグルト", "博物館"]
+    ];
+
+// =========================================================================
+// 状態管理＆ローカルストレージ復帰
+// =========================================================================
+const STORAGE_KEY = "wordocchi_session_v1";
+let myId = "";
+let myName = "";
+let currentRoomId = "";
+let roomRef = null;
+let roomData = null;
+let lastMsgCount = 0;
+
+function generatePlayerId() {
+return "p_" + Math.random().toString(36).substring(2, 10);
+}
+
+function saveSession(roomId, playerId, name) {
+localStorage.setItem(STORAGE_KEY, JSON.stringify({ roomId, playerId, name}));
+}
+
+function clearSavedSession() {
+localStorage.removeItem(STORAGE_KEY);
+document.getElementById("resume-banner").classList.add("hidden");
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+const saved = localStorage.getItem(STORAGE_KEY);
+if (saved) {
+try {
+const data = JSON.parse(saved);
+if (data.roomId && data.playerId && data.name) {
+document.getElementById("input-name").value = data.name;
+document.getElementById("resume-info").textContent = `ルームID: ${data.roomId}（名前: ${data.name}）`;
+document.getElementById("resume-banner").classList.remove("hidden");
+}
+} catch (e) {
+clearSavedSession();
+}
+}
+});
+
+async function resumeRoom() {
+const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+if (!saved) return;
+const snap = await db.ref(`rooms/${saved.roomId}`).once("value");
+if (!snap.exists()) {
+alert("そのルームは既に終了しているようです。新しく作成してください！");
+clearSavedSession();
+return;
+}
+myId = saved.playerId;
+myName = saved.name;
+enterRoom(saved.roomId);
+}
+
+// =========================================================================
+// ルーム作成・入室・退室
+// =========================================================================
+async function createRoom() {
+const name = document.getElementById("input-name").value.trim();
+if (!name) return alert("ニックネームを入力してね！");
+
+let roomId = "";
+for (let i = 0; i < 10; i++) {
+const candidate = Math.floor(1000 + Math.random() * 9000).toString();
+const snap = await db.ref(`rooms/${candidate}`).once("value");
+if (!snap.exists()) {
+roomId = candidate;
+break;
+}
+}
+if (!roomId) return alert("部屋の生成に失敗しました。もう一度お試しください。");
+
+myId = generatePlayerId();
+myName = name;
+
+const initialData = {
+createdAt: Date.now(),
+phase: "waiting",
+parentId: "",
+criterion: "",
+initialWords: [],
+championWord: "",
+championAuthor: "",
+pendingWord: null,
+usedCriteria: [],
+usedWordSets: [],
+finalSubmissions: {},
+winnerId: "",
+players: {
+[myId]: { name: myName, score: 0, joinedAt: Date.now()}
+},
+messages: {
+msg_0: {
+type: "system",
+text: `ルームが作成されました！誰か1人が「親になる」を押してスタートしよう！`,
+ts: Date.now()
+}
+}
+};
+
+await db.ref(`rooms/${roomId}`).set(initialData);
+saveSession(roomId, myId, myName);
+enterRoom(roomId);
+}
+
+async function joinRoom() {
+const name = document.getElementById("input-name").value.trim();
+const roomId = document.getElementById("input-room-id").value.trim();
+if (!name) return alert("ニックネームを入力してね！");
+if (!/^\d{4}$/.test(roomId)) return alert("4桁の数字IDを入力してね！");
+
+const snap = await db.ref(`rooms/${roomId}`).once("value");
+if (!snap.exists()) return alert("そのルームIDは見つかりませんでした！");
+
+const saved = localStorage.getItem(STORAGE_KEY);
+if (saved) {
+const parsed = JSON.parse(saved);
+if (parsed.roomId === roomId && parsed.playerId) {
+myId = parsed.playerId;
+}
+}
+if (!myId) myId = generatePlayerId();
+myName = name;
+
+const existingPlayer = snap.val().players && snap.val().players[myId];
+if (!existingPlayer) {
+await db.ref(`rooms/${roomId}/players/${myId}`).set({
+name: myName,
+score: 0,
+joinedAt: Date.now()
+});
+await pushSystemMessage(roomId, `👋 ${myName} さんが入室しました！`);
+} else {
+await db.ref(`rooms/${roomId}/players/${myId}/name`).set(myName);
+}
+
+saveSession(roomId, myId, myName);
+enterRoom(roomId);
+}
+
+function enterRoom(roomId) {
+currentRoomId = roomId;
+document.getElementById("lobby-screen").classList.add("hidden");
+document.getElementById("game-screen").classList.remove("hidden");
+document.getElementById("header-room-id").textContent = roomId;
+
+if (roomRef) roomRef.off();
+roomRef = db.ref(`rooms/${roomId}`);
+roomRef.on("value", (snap) => {
+if (!snap.exists()) {
+alert("ルームが解散されました。");
+leaveRoom(true);
+return;
+}
+roomData = snap.val();
+renderAll();
+});
+}
+
+function leaveRoom(skipConfirm = false) {
+if (!skipConfirm &&!confirm("ルームから退室しますか？（同じIDを入れればまた戻れます）")) return;
+if (roomRef) roomRef.off();
+clearSavedSession();
+currentRoomId = "";
+roomData = null;
+lastMsgCount = 0;
+document.getElementById("game-screen").classList.add("hidden");
+document.getElementById("lobby-screen").classList.remove("hidden");
+}
+
+function copyRoomId() {
+navigator.clipboard.writeText(currentRoomId);
+alert(`ルームID「${currentRoomId}」をコピーしました！`);
+}
+
+// =========================================================================
+// ゲーム進行アクション
+// =========================================================================
+function pickRandomUnused(list, usedIndices = []) {
+let available = list.map((_, idx) => idx).filter(idx =>!usedIndices.includes(idx));
+if (available.length === 0) {
+available = list.map((_, idx) => idx);
+usedIndices = [];
+}
+const chosenIdx = available[Math.floor(Math.random() * available.length)];
+return { item: list[chosenIdx], index: chosenIdx, reset: available.length === list.length};
+}
+
+async function becomeParent() {
+const usedC = roomData.usedCriteria || [];
+const usedW = roomData.usedWordSets || [];
+
+const cPick = pickRandomUnused(CRITERIA_LIST, usedC);
+const wPick = pickRandomUnused(WORD_SETS, usedW);
+
+const nextUsedC = cPick.reset? [cPick.index]: [...usedC, cPick.index];
+const nextUsedW = wPick.reset? [wPick.index]: [...usedW, wPick.index];
+
+await roomRef.update({
+phase: "initial_pick",
+parentId: myId,
+criterion: cPick.item,
+initialWords: wPick.item,
+championWord: "",
+championAuthor: "",
+pendingWord: null,
+finalSubmissions: {},
+winnerId: "",
+usedCriteria: nextUsedC,
+usedWordSets: nextUsedW
+});
+
+await pushSystemMessage(currentRoomId, `👑 ${myName} さんが今回のになりました！最初の3択を選んでいます…`);
+}
+
+async function rerollCriterion() {
+const usedC = roomData.usedCriteria || [];
+const cPick = pickRandomUnused(CRITERIA_LIST, usedC);
+const nextUsedC = cPick.reset? [cPick.index]: [...usedC, cPick.index];
+await roomRef.update({
+criterion: cPick.item,
+usedCriteria: nextUsedC
+});
+}
+
+async function setCustomCriterion() {
+const custom = prompt("自分で考えた「基準（お題）」を入力してください：", roomData.criterion);
+if (custom && custom.trim()) {
+await roomRef.update({ criterion: custom.trim()});
+}
+}
+
+async function selectInitialWord(word) {
+await roomRef.update({
+phase: "playing",
+championWord: word,
+championAuthor: "初期カード"
+});
+await pushSystemMessage(
+currentRoomId,
+`🃏 初期カードから、暫定1位は「${word}」に決まりました！\n子はどんどん単語を送ってね！`
+);
+}
+
+async function sendCandidateWord() {
+const input = document.getElementById("word-input");
+if (!input) return;
+const text = input.value.trim();
+if (!text) return;
+if (roomData.pendingWord) return alert("親が前の単語を判定中です！");
+
+input.value = "";
+const msgKey = db.ref().push().key;
+
+await roomRef.update({
+pendingWord: {
+id: msgKey,
+text: text,
+authorId: myId,
+authorName: myName
+}
+});
+
+await db.ref(`rooms/${currentRoomId}/messages/${msgKey}`).set({
+type: "candidate",
+text: text,
+authorId: myId,
+authorName: myName,
+ts: Date.now()
+});
+}
+
+async function judgeWord(challengerWins) {
+const pending = roomData.pendingWord;
+if (!pending) return;
+
+const prevChamp = roomData.championWord;
+if (challengerWins) {
+await roomRef.update({
+championWord: pending.text,
+championAuthor: pending.authorName,
+pendingWord: null
+});
+await pushSystemMessage(
+currentRoomId,
+`🔥 暫定1位更新！が「${prevChamp}」に勝利！（提案：${pending.authorName}）`
+);
+} else {
+await roomRef.update({
+pendingWord: null
+});
+await pushSystemMessage(
+currentRoomId,
+`🛡️ 防衛！暫定1位の勝ち！（敗退：${pending.text}）`
+);
+}
+}
+
+async function startShowdown() {
+if (roomData.pendingWord) {
+return alert("先に今出ている単語の「どっち？」を決めてね！");
+}
+await roomRef.update({
+phase: "showdown",
+finalSubmissions: {}
+});
+await pushSystemMessage(
+currentRoomId,
+`🔔 に突入しました！\n子は「この基準で1位になる！」と思う最終ワードを1つ送信してください！`
+);
+}
+
+async function submitFinalWord() {
+const input = document.getElementById("final-input");
+if (!input) return;
+const text = input.value.trim();
+if (!text) return;
+
+await db.ref(`rooms/${currentRoomId}/finalSubmissions/${myId}`).set({
+name: myName,
+text: text,
+ts: Date.now()
+});
+await pushSystemMessage(currentRoomId, `📩 ${myName} さんが最終ワードをセットしました！`);
+}
+
+async function selectShowdownWinner(winnerPlayerId) {
+const subs = roomData.finalSubmissions || {};
+const winSub = subs[winnerPlayerId];
+if (!winSub) return;
+
+const currentScore = (roomData.players[winnerPlayerId]?.score || 0) + 1;
+await roomRef.update({
+phase: "reveal",
+winnerId: winnerPlayerId,
+[`players/${winnerPlayerId}/score`]: currentScore
+});
+
+await pushSystemMessage(
+currentRoomId,
+`🏆 決戦の勝者は ${winSub.name} さんの！（+1pt）\nさあ、気になる「基準」を公開しよう！`
+);
+}
+
+async function revealCriterion() {
+await pushSystemMessage(
+currentRoomId,
+`👀 正解の基準は……\n『 ${roomData.criterion} 』でした！！`
+);
+await roomRef.update({
+phase: "waiting",
+parentId: ""
+});
+}
+
+async function pushSystemMessage(roomId, text) {
+const key = db.ref().push().key;
+await db.ref(`rooms/${roomId}/messages/${key}`).set({
+type: "system",
+text: text,
+ts: Date.now()
+});
+}
+
+    // =========================================================================
+    // 画面描画ロジック
+    // =========================================================================
+    function renderAll() {
+      if (!roomData) return;
+      const players = roomData.players || {};
+      const playerIds = Object.keys(players);
+      const isParent = roomData.parentId === myId;
+
+      document.getElementById("header-player-count").textContent = `👥 ${playerIds.length}人`;
+      const playersBar = document.getElementById("players-bar");
+      playersBar.innerHTML = playerIds.map(pid => {
+        const p = players[pid];
+        const isP = pid === roomData.parentId;
+        const isMe = pid === myId;
+        return `
+          <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full shrink-0 font-bold ${
+            isP ? "bg-amber-400 text-slate-900" : isMe ? "bg-indigo-100 text-indigo-800" : "bg-white text-slate-700 border border-slate-200"
+          }">
+            ${isP ? "👑" : ""}${escapeHtml(p.name)}
+            <span class="text-[10px] opacity-75">(${p.score || 0}pt)</span>
+          </span>
+        `;
+      }).join("");
+
+      const statusPanel = document.getElementById("status-panel");
+      if (roomData.phase === "waiting") {
+        statusPanel.innerHTML = `
+          <div class="text-center py-1">
+            <p class="text-xs font-bold text-slate-500">次のラウンドの準備中</p>
+            <p class="text-sm font-black text-slate-800 mt-0.5">下のボタンから「親」を決めてスタート！</p>
+          </div>
+        `;
+      } else {
+        const parentName = players[roomData.parentId]?.name || "親";
+        let html = `
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-bold text-amber-800">👑 今回の親：${escapeHtml(parentName)}</span>
+            <span class="px-2 py-0.5 rounded bg-amber-200/70 text-amber-900 font-bold">
+              ${roomData.phase === "initial_pick" ? "初期3択中" : roomData.phase === "playing" ? "2択バトル中" : roomData.phase === "showdown" ? "決戦フェイズ" : "結果発表"}
+            </span>
+          </div>
+        `;
+
+        if (isParent) {
+          html += `
+            <div class="bg-slate-900 text-white rounded-xl p-3 shadow-inner space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="text-[10px] font-bold bg-amber-400 text-slate-900 px-2 py-0.5 rounded">あなただけに見える基準</span>
+                ${roomData.phase === "initial_pick" ? `
+                  <div class="flex gap-1.5">
+                    <button onclick="rerollCriterion()" class="text-[11px] bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">🔄 引き直す</button>
+                    <button onclick="setCustomCriterion()" class="text-[11px] bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">✏️ 自作</button>
+                  </div>
+                ` : ""}
+              </div>
+              <p class="text-sm sm:text-base font-black text-amber-300 leading-snug">${escapeHtml(roomData.criterion)}</p>
+            </div>
+          `;
+        } else {
+          html += `
+            <div class="bg-white/80 border border-amber-200 rounded-xl px-3 py-2 text-center">
+              <span class="text-xs font-bold text-slate-500">🔒 基準（お題）：</span>
+              <span class="text-xs font-black text-slate-700">親の選び方から推理しよう！</span>
+            </div>
+          `;
+        }
+
+        if (roomData.championWord) {
+          html += `
+            <div class="flex items-center justify-between bg-amber-400/20 border-2 border-amber-400 rounded-xl px-3.5 py-2">
+              <div>
+                <span class="text-[10px] font-black text-amber-800 block">👑 現在の暫定1位</span>
+                <span class="text-lg font-black text-slate-900">${escapeHtml(roomData.championWord)}</span>
+              </div>
+              <span class="text-[11px] font-bold text-slate-500">by ${escapeHtml(roomData.championAuthor)}</span>
+            </div>
+          `;
+        }
+        statusPanel.innerHTML = html;
+      }
+
+      const chatContainer = document.getElementById("chat-container");
+      const msgsObj = roomData.messages || {};
+      const msgKeys = Object.keys(msgsObj);
+      const shouldScroll = msgKeys.length !== lastMsgCount;
+      lastMsgCount = msgKeys.length;
+
+      chatContainer.innerHTML = msgKeys.map(k => {
+        const m = msgsObj[k];
+        if (m.type === "system") {
+          return `
+            <div class="flex justify-center animate-pop">
+              <div class="bg-slate-700/85 text-white text-xs font-bold px-4 py-2 rounded-2xl max-w-[90%] text-center whitespace-pre-line shadow-sm leading-relaxed">
+                ${escapeHtml(m.text)}
+              </div>
+            </div>
+          `;
+        } else {
+          const isMine = m.authorId === myId;
+          return `
+            <div class="flex flex-col ${isMine ? "items-end" : "items-start"} animate-pop">
+              <span class="text-[10px] font-bold text-slate-500 mb-0.5 px-1">${escapeHtml(m.authorName)}</span>
+              <div class="px-4 py-2.5 rounded-2xl max-w-[80%] shadow-sm font-black text-base ${
+                isMine ? "bg-indigo-600 text-white rounded-tr-sm" : "bg-white text-slate-800 rounded-tl-sm border border-slate-200"
+              }">
+                ${escapeHtml(m.text)}
+              </div>
+            </div>
+          `;
+        }
+      }).join("");
+
+      if (shouldScroll) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+
+      renderBottomPanel(isParent, playerIds);
+    }
+
+    function renderBottomPanel(isParent, playerIds) {
+      const bottom = document.getElementById("bottom-panel");
+
+      if (roomData.phase === "waiting") {
+        bottom.innerHTML = `
+          <button onclick="becomeParent()" class="w-full bg-amber-400 hover:bg-amber-500 active:scale-[0.99] text-slate-900 font-black py-3.5 rounded-2xl shadow-md transition text-base">
+            👑 自分が「親」になって始める
+          </button>
+        `;
+        return;
+      }
+
+      if (roomData.phase === "initial_pick") {
+        if (isParent) {
+          const words = roomData.initialWords || [];
+          bottom.innerHTML = `
+            <div class="space-y-2">
+              <p class="text-xs font-black text-center text-slate-600">基準に一番近いと思う最初の1つをタップ！</p>
+              <div class="grid grid-cols-3 gap-2">
+                ${words.map(w => `
+                  <button onclick="selectInitialWord('${escapeHtml(w)}')" class="bg-amber-100 hover:bg-amber-300 active:scale-95 border-2 border-amber-400 text-slate-900 font-black py-3 px-2 rounded-xl text-sm shadow-sm transition break-words">
+                    ${escapeHtml(w)}
+                  </button>
+                `).join("")}
+              </div>
+            </div>
+          `;
+        } else {
+          bottom.innerHTML = `
+            <div class="text-center py-3 text-xs font-bold text-slate-500">
+              ⏳ 親が最初の3択カードから「暫定1位」を選んでいます…
+            </div>
+          `;
+        }
+        return;
+      }
+
+      if (roomData.phase === "playing") {
+        if (isParent) {
+          const pending = roomData.pendingWord;
+          if (pending) {
+            bottom.innerHTML = `
+              <div class="space-y-2.5 animate-pop">
+                <p class="text-xs font-black text-center text-indigo-700">⚡ ${escapeHtml(pending.authorName)} からの挑戦！どっちが基準に近い？</p>
+                <div class="grid grid-cols-2 gap-2.5">
+                  <button onclick="judgeWord(false)" class="bg-amber-100 hover:bg-amber-200 active:scale-95 border-2 border-amber-500 p-3 rounded-2xl text-center shadow">
+                    <span class="block text-[10px] font-black text-amber-800">👑 暫定1位（防衛）</span>
+                    <span class="block text-base font-black text-slate-900 mt-0.5 break-words">${escapeHtml(roomData.championWord)}</span>
+                  </button>
+                  <button onclick="judgeWord(true)" class="bg-indigo-600 hover:bg-indigo-700 active:scale-95 border-2 border-indigo-700 p-3 rounded-2xl text-center shadow text-white">
+                    <span class="block text-[10px] font-black text-indigo-200">🆕 挑戦者（交代）</span>
+                    <span class="block text-base font-black mt-0.5 break-words">${escapeHtml(pending.text)}</span>
+                  </button>
+                </div>
+              </div>
+            `;
+          } else {
+            bottom.innerHTML = `
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-xs font-bold text-slate-500 flex-1">💬 子の単語入力を待っています…</p>
+                <button onclick="startShowdown()" class="bg-rose-500 hover:bg-rose-600 text-white font-black px-4 py-3 rounded-xl text-xs shadow transition shrink-0">
+                  🔔 決戦フェイズへ！
+                </button>
+              </div>
+            `;
+          }
+        } else {
+          const isLocked = !!roomData.pendingWord;
+          bottom.innerHTML = `
+            <form onsubmit="event.preventDefault(); sendCandidateWord();" class="flex gap-2">
+              <input id="word-input" type="text" maxlength="25" ${isLocked ? "disabled" : ""}
+                placeholder="${isLocked ? "親が判定中..." : "単語を入力して送信！"}"
+                class="flex-1 px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-base disabled:bg-slate-100 select-text" />
+              <button type="submit" ${isLocked ? "disabled" : ""}
+                class="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-black px-5 py-3 rounded-xl shadow transition shrink-0">
+                送信
+              </button>
+            </form>
+          `;
+        }
+        return;
+      }
+
+      if (roomData.phase === "showdown") {
+        const subs = roomData.finalSubmissions || {};
+        const childIds = playerIds.filter(pid => pid !== roomData.parentId);
+        const submittedCount = childIds.filter(pid => subs[pid]).length;
+
+        if (isParent) {
+          if (childIds.length > 0 && submittedCount >= childIds.length) {
+            bottom.innerHTML = `
+              <div class="space-y-2 animate-pop">
+                <p class="text-xs font-black text-center text-rose-600">🎉 全員提出完了！基準に一番近い「優勝」をタップ！</p>
+                <div class="grid grid-cols-1 gap-2 max-h-44 overflow-y-auto">
+                  ${childIds.map(pid => {
+                    const s = subs[pid];
+                    return `
+                      <button onclick="selectShowdownWinner('${pid}')" class="flex items-center justify-between bg-amber-50 hover:bg-amber-200 border-2 border-amber-400 px-4 py-2.5 rounded-xl font-black text-left transition">
+                        <span class="text-base text-slate-900">${escapeHtml(s.text)}</span>
+                        <span class="text-xs text-slate-500">${escapeHtml(s.name)}</span>
+                      </button>
+                    `;
+                  }).join("")}
+                </div>
+              </div>
+            `;
+          } else {
+            bottom.innerHTML = `
+              <div class="space-y-2 text-center">
+                <p class="text-xs font-bold text-slate-600">⏳ 子の最終ワード提出待ち（${submittedCount} / ${childIds.length}人完了）</p>
+              </div>
+            `;
+          }
+        } else {
+          if (subs[myId]) {
+            bottom.innerHTML = `
+              <div class="text-center py-2.5 bg-indigo-50 rounded-xl border border-indigo-200">
+                <p class="text-xs font-bold text-indigo-800">✅ 提出完了：「${escapeHtml(subs[myId].text)}」</p>
+                <p class="text-[11px] text-slate-500 mt-0.5">他のメンバーの提出を待っています（${submittedCount}/${childIds.length}人）</p>
+              </div>
+            `;
+          } else {
+            bottom.innerHTML = `
+              <form onsubmit="event.preventDefault(); submitFinalWord();" class="space-y-1.5">
+                <p class="text-[11px] font-black text-rose-600">🔥 決戦！これが1位になると思うワードを1つ送信！</p>
+                <div class="flex gap-2">
+                  <input id="final-input" type="text" maxlength="25" placeholder="最終回答を入力..."
+                    class="flex-1 px-4 py-3 rounded-xl border-2 border-rose-400 focus:outline-none font-bold text-base select-text" />
+                  <button type="submit" class="bg-rose-500 hover:bg-rose-600 text-white font-black px-5 py-3 rounded-xl shadow transition shrink-0">
+                    決定！
+                  </button>
+                </div>
+              </form>
+            `;
+          }
+        }
+        return;
+      }
+
+      if (roomData.phase === "reveal") {
+        if (isParent) {
+          bottom.innerHTML = `
+            <button onclick="revealCriterion()" class="w-full bg-emerald-500 hover:bg-emerald-600 active:scale-[0.99] text-white font-black py-3.5 rounded-2xl shadow-md transition text-base">
+              👀 チャット全員に「基準」を公開する！
+            </button>
+          `;
+        } else {
+          bottom.innerHTML = `
+            <div class="text-center py-3 text-xs font-bold text-slate-600">
+              🥁 親が「基準」を公開するのを待っています…！
+            </div>
+          `;
+        }
+      }
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+  </script>
+</body>
+</html>
