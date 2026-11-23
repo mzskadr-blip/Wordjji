@@ -96,7 +96,7 @@
         <button onclick="copyRoomId()" class="text-[11px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-200">
           コピー
         </button>
-        <button onclick="shareInvite()" class="text-[11px] bg-amber-400 hover:bg-amber-500 px-2 py-1 rounded text-slate-900 font-bold">
+        <button onclick="shareInvite()" class="text-[11px] bg-indigo-600 hover:bg-indigo-500 px-2.5 py-1 rounded text-white font-bold">
           📤 招待
         </button>
       </div>
@@ -234,9 +234,10 @@
     ];
 
 // =========================================================================
-// 状態管理＆ローカルストレージ復帰
+// 状態管理＆ローカルストレージ復帰＆24時間経過ルーム削除
 // =========================================================================
 const STORAGE_KEY = "wordocchi_session_v1";
+const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 let myId = "";
 let myName = "";
 let currentRoomId = "";
@@ -257,11 +258,35 @@ localStorage.removeItem(STORAGE_KEY);
 document.getElementById("resume-banner").classList.add("hidden");
 }
 
-window.addEventListener("DOMContentLoaded", () => {
-const roomParam = new URLSearchParams(location.search).get("room");
-if (roomParam && /^\d{4}$/.test(roomParam)) {
-document.getElementById("input-room-id").value = roomParam;
+async function cleanupExpiredRooms() {
+try {
+const snap = await db.ref("rooms").once("value");
+if (!snap.exists()) return;
+const now = Date.now();
+const updates = {};
+snap.forEach(child => {
+const val = child.val();
+if (val && typeof val.createdAt === "number" && (now - val.createdAt) >= ROOM_TTL_MS) {
+updates[child.key] = null;
 }
+});
+if (Object.keys(updates).length > 0) {
+await db.ref("rooms").update(updates);
+}
+} catch (e) {
+console.warn("期限切れルームのクリーンアップをスキップ:", e);
+}
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+cleanupExpiredRooms();
+
+const params = new URLSearchParams(window.location.search);
+const roomParam = params.get("room");
+if (roomParam && /^\d{4}$/.test(roomParam.trim())) {
+document.getElementById("input-room-id").value = roomParam.trim();
+}
+
 const saved = localStorage.getItem(STORAGE_KEY);
 if (saved) {
 try {
@@ -292,7 +317,7 @@ enterRoom(saved.roomId);
 }
 
 // =========================================================================
-// ルーム作成・入室・退室
+// ルーム作成・入室・退室・招待
 // =========================================================================
 async function createRoom() {
 const name = document.getElementById("input-name").value.trim();
@@ -312,8 +337,11 @@ if (!roomId) return alert("部屋の生成に失敗しました。もう一度�
 myId = generatePlayerId();
 myName = name;
 
+const initMsgKey = db.ref(`rooms/${roomId}/messages`).push().key;
+const now = Date.now();
+
 const initialData = {
-createdAt: Date.now(),
+createdAt: now,
 phase: "waiting",
 parentId: "",
 criterion: "",
@@ -324,15 +352,16 @@ pendingWord: null,
 usedCriteria: [],
 usedWordSets: [],
 finalSubmissions: {},
+showdownClosed: false,
 winnerId: "",
 players: {
-[myId]: { name: myName, score: 0, joinedAt: Date.now()}
+[myId]: { name: myName, score: 0, joinedAt: now}
 },
 messages: {
-msg_0: {
+[initMsgKey]: {
 type: "system",
 text: `ルームが作成されました！誰か1人が「親になる」を押してスタートしよう！`,
-ts: Date.now()
+ts: now
 }
 }
 };
@@ -412,18 +441,32 @@ navigator.clipboard.writeText(currentRoomId);
 alert(`ルームID「${currentRoomId}」をコピーしました！`);
 }
 
+function getInviteUrl() {
+const url = new URL(window.location.href);
+url.searchParams.set("room", currentRoomId);
+return url.toString();
+}
+
 async function shareInvite() {
-const url = `${location.origin}${location.pathname}?room=${currentRoomId}`;
-const text = `ワードッチ！一緒に遊ぼう🎉\nルームID：${currentRoomId}\nリンクを開くとIDが自動で入るよ。そのまま名前を入れて「入室する」を押してね！\n${url}`;
+const inviteUrl = getInviteUrl();
+const shareText = `「ワードッチ！」に招待されたよ！\nルームID：${currentRoomId}\n${inviteUrl}`;
 if (navigator.share) {
 try {
-await navigator.share({ title: "ワードッチ！", text });
-} catch (e) {
-// 共有をキャンセルした場合は何もしない
+await navigator.share({
+title: "ワードッチ！オンライン",
+text: shareText,
+url: inviteUrl
+});
+return;
+} catch (err) {
+if (err && err.name === "AbortError") return;
 }
-} else {
-navigator.clipboard.writeText(text);
-alert("招待文をコピーしました！LINEなどで送ってね");
+}
+try {
+await navigator.clipboard.writeText(shareText);
+alert("招待メッセージをコピーしました！通話やチャットに貼り付けて送ってね。");
+} catch (err) {
+alert(shareText);
 }
 }
 
@@ -459,6 +502,7 @@ championWord: "",
 championAuthor: "",
 pendingWord: null,
 finalSubmissions: {},
+showdownClosed: false,
 winnerId: "",
 usedCriteria: nextUsedC,
 usedWordSets: nextUsedW
@@ -485,6 +529,7 @@ await roomRef.update({ criterion: custom.trim()});
 }
 
 async function selectInitialWord(word) {
+const words = roomData.initialWords || [];
 await roomRef.update({
 phase: "playing",
 championWord: word,
@@ -492,7 +537,7 @@ championAuthor: "初期カード"
 });
 await pushSystemMessage(
 currentRoomId,
-`🃏 初期カードから、暫定1位は「${word}」に決まりました！\n子はどんどん単語を送ってね！`
+`🃏 初期カード【${words.join(" / ")}】から、暫定1位は『${word}』に決まりました！\n子はどんどん単語を送ってね！`
 );
 }
 
@@ -504,7 +549,7 @@ if (!text) return;
 if (roomData.pendingWord) return alert("親が前の単語を判定中です！");
 
 input.value = "";
-const msgKey = db.ref().push().key;
+const msgKey = db.ref(`rooms/${currentRoomId}/messages`).push().key;
 
 await roomRef.update({
 pendingWord: {
@@ -537,7 +582,7 @@ pendingWord: null
 });
 await pushSystemMessage(
 currentRoomId,
-`🔥 暫定1位更新！が「${prevChamp}」に勝利！（提案：${pending.authorName}）`
+`🔥 暫定1位更新！『${pending.text}』が『${prevChamp}』に勝利！（提案：${pending.authorName}）`
 );
 } else {
 await roomRef.update({
@@ -545,7 +590,7 @@ pendingWord: null
 });
 await pushSystemMessage(
 currentRoomId,
-`🛡️ 防衛！暫定1位の勝ち！（敗退：${pending.text}）`
+`🛡️ 防衛！『${prevChamp}』の勝ち！（敗退：『${pending.text}』）`
 );
 }
 }
@@ -556,11 +601,24 @@ return alert("先に今出ている単語の「どっち？」を決めてね！
 }
 await roomRef.update({
 phase: "showdown",
-finalSubmissions: {}
+finalSubmissions: {},
+showdownClosed: false
 });
 await pushSystemMessage(
 currentRoomId,
 `🔔 に突入しました！\n子は「この基準で1位になる！」と思う最終ワードを1つ送信してください！`
+);
+}
+
+async function closeShowdownSubmissions() {
+const subs = roomData.finalSubmissions || {};
+if (Object.keys(subs).length === 0) {
+return alert("まだ誰も最終ワードを提出していません！");
+}
+await roomRef.update({ showdownClosed: true});
+await pushSystemMessage(
+currentRoomId,
+`✂️ 親が最終ワードの提出を締め切りました！勝者を選んでいます…`
 );
 }
 
@@ -592,7 +650,7 @@ winnerId: winnerPlayerId,
 
 await pushSystemMessage(
 currentRoomId,
-`🏆 決戦の勝者は ${winSub.name} さんの！（+1pt）\nさあ、気になる「基準」を公開しよう！`
+`🏆 決戦の勝者は ${winSub.name} さんの『${winSub.text}』！（+1pt）\nさあ、気になる「基準」を公開しよう！`
 );
 }
 
@@ -608,7 +666,7 @@ parentId: ""
 }
 
 async function pushSystemMessage(roomId, text) {
-const key = db.ref().push().key;
+const key = db.ref(`rooms/${roomId}/messages`).push().key;
 await db.ref(`rooms/${roomId}/messages/${key}`).set({
 type: "system",
 text: text,
@@ -684,6 +742,30 @@ ts: Date.now()
           `;
         }
 
+        // 初期カード3枚の履歴・選択状況表示
+        const initWords = roomData.initialWords || [];
+        if (initWords.length > 0 && roomData.phase !== "initial_pick") {
+          html += `
+            <div class="bg-white/90 border border-slate-200 rounded-xl px-3 py-2 space-y-1">
+              <span class="text-[10px] font-bold text-slate-500 block">🃏 初期カード（3択）</span>
+              <div class="grid grid-cols-3 gap-1.5">
+                ${initWords.map(w => {
+                  const isSelected = w === roomData.championWord;
+                  return `
+                    <div class="px-2 py-1 rounded-lg text-xs font-black text-center truncate ${
+                      isSelected
+                        ? "bg-amber-400 text-slate-900 ring-2 ring-amber-500"
+                        : "bg-slate-100 text-slate-500 line-through decoration-slate-400/70"
+                    }">
+                      ${isSelected ? "👑 " : ""}${escapeHtml(w)}
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            </div>
+          `;
+        }
+
         if (roomData.championWord) {
           html += `
             <div class="flex items-center justify-between bg-amber-400/20 border-2 border-amber-400 rounded-xl px-3.5 py-2">
@@ -698,22 +780,19 @@ ts: Date.now()
         statusPanel.innerHTML = html;
       }
 
+      // チャットメッセージ描画（ts昇順ソート）
       const chatContainer = document.getElementById("chat-container");
       const msgsObj = roomData.messages || {};
-      const msgKeys = Object.keys(msgsObj);
-      const shouldScroll = msgKeys.length !== lastMsgCount;
-      lastMsgCount = msgKeys.length;
+      const sortedMsgs = Object.keys(msgsObj)
+        .map(k => ({ key: k, ...msgsObj[k] }))
+        .sort((a, b) => (a.ts || 0) - (b.ts || 0));
 
-      chatContainer.innerHTML = msgKeys.map(k => {
-        const m = msgsObj[k];
+      const shouldScroll = sortedMsgs.length !== lastMsgCount;
+      lastMsgCount = sortedMsgs.length;
+
+      chatContainer.innerHTML = sortedMsgs.map(m => {
         if (m.type === "system") {
-          return `
-            <div class="flex justify-center animate-pop">
-              <div class="bg-slate-700/85 text-white text-xs font-bold px-4 py-2 rounded-2xl max-w-[90%] text-center whitespace-pre-line shadow-sm leading-relaxed">
-                ${escapeHtml(m.text)}
-              </div>
-            </div>
-          `;
+          return `<div class="flex justify-center animate-pop"><div class="bg-slate-700/85 text-white text-xs font-bold px-3.5 py-1.5 rounded-2xl max-w-[90%] text-center whitespace-pre-line shadow-sm leading-relaxed">${escapeHtml(m.text)}</div></div>`;
         } else {
           const isMine = m.authorId === myId;
           return `
@@ -821,16 +900,19 @@ ts: Date.now()
 
       if (roomData.phase === "showdown") {
         const subs = roomData.finalSubmissions || {};
+        const submittedIds = Object.keys(subs);
         const childIds = playerIds.filter(pid => pid !== roomData.parentId);
         const submittedCount = childIds.filter(pid => subs[pid]).length;
+        const allSubmitted = childIds.length > 0 && submittedCount >= childIds.length;
+        const canPickWinner = allSubmitted || !!roomData.showdownClosed;
 
         if (isParent) {
-          if (childIds.length > 0 && submittedCount >= childIds.length) {
+          if (canPickWinner && submittedIds.length > 0) {
             bottom.innerHTML = `
               <div class="space-y-2 animate-pop">
-                <p class="text-xs font-black text-center text-rose-600">🎉 全員提出完了！基準に一番近い「優勝」をタップ！</p>
+                <p class="text-xs font-black text-center text-rose-600">🎉 提出完了！基準に一番近い「優勝」をタップ！</p>
                 <div class="grid grid-cols-1 gap-2 max-h-44 overflow-y-auto">
-                  ${childIds.map(pid => {
+                  ${submittedIds.map(pid => {
                     const s = subs[pid];
                     return `
                       <button onclick="selectShowdownWinner('${pid}')" class="flex items-center justify-between bg-amber-50 hover:bg-amber-200 border-2 border-amber-400 px-4 py-2.5 rounded-xl font-black text-left transition">
@@ -844,8 +926,13 @@ ts: Date.now()
             `;
           } else {
             bottom.innerHTML = `
-              <div class="space-y-2 text-center">
+              <div class="space-y-2.5 text-center">
                 <p class="text-xs font-bold text-slate-600">⏳ 子の最終ワード提出待ち（${submittedCount} / ${childIds.length}人完了）</p>
+                ${submittedCount >= 1 ? `
+                  <button onclick="closeShowdownSubmissions()" class="w-full bg-slate-800 hover:bg-slate-700 text-white font-black py-2.5 px-4 rounded-xl text-xs shadow transition">
+                    ✂️ 提出を締め切って勝者選択へ進む
+                  </button>
+                ` : ""}
               </div>
             `;
           }
@@ -855,6 +942,12 @@ ts: Date.now()
               <div class="text-center py-2.5 bg-indigo-50 rounded-xl border border-indigo-200">
                 <p class="text-xs font-bold text-indigo-800">✅ 提出完了：「${escapeHtml(subs[myId].text)}」</p>
                 <p class="text-[11px] text-slate-500 mt-0.5">他のメンバーの提出を待っています（${submittedCount}/${childIds.length}人）</p>
+              </div>
+            `;
+          } else if (roomData.showdownClosed) {
+            bottom.innerHTML = `
+              <div class="text-center py-2.5 bg-slate-100 rounded-xl border border-slate-200">
+                <p class="text-xs font-bold text-slate-600">✂️ 最終ワードの提出は締め切られました。親が勝者を選んでいます…</p>
               </div>
             `;
           } else {
