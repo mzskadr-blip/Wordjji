@@ -112,7 +112,7 @@
     </div>
 
     <!-- 現在のステータス・暫定1位・親のお題エリア -->
-    <div id="status-panel" class="bg-gradient-to-b from-amber-50 to-white border-b border-amber-200 px-4 py-3 shrink-0 space-y-2 shadow-sm z-10">
+    <div id="status-panel" class="bg-gradient-to-b from-amber-50 to-white border-b border-amber-200 px-4 py-3 shrink-0 space-y-2 shadow-sm z-10 max-h-[42dvh] overflow-y-auto">
       <!-- JSで動的に描画 -->
     </div>
 
@@ -363,7 +363,7 @@ players: {
 messages: {
 [initMsgKey]: {
 type: "system",
-text: `ルームが作成されました！誰か1人が「親になる」を押してスタートしよう！`,
+text: `ルーム ${roomId} が作成されました！誰か1人が「親になる」を押してスタートしよう！`,
 ts: now
 }
 }
@@ -519,7 +519,7 @@ usedCriteria: nextUsedC,
 usedWordSets: nextUsedW
 });
 
-await pushSystemMessage(currentRoomId, `👑 ${myName} さんが今回のになりました！最初の3択を選んでいます…`);
+await pushSystemMessage(currentRoomId, `👑 ${myName} さんが今回の親になりました！最初の3択を選んでいます…`);
 }
 
 async function rerollCriterion() {
@@ -549,7 +549,7 @@ roundStartedAt: Date.now()
 });
 await pushSystemMessage(
 currentRoomId,
-`🃏 初期カード【${words.join(" / ")}】から、暫定1位は『${word}』に決まりました！\n制限時間3分スタート！子はどんどん単語を送ってね！`
+`🃏 初期カード（${words.join(" / ")}）から、暫定1位は『${word}』に決まりました！\n制限時間3分スタート！子はどんどん単語を送ってね！`
 );
 }
 
@@ -618,7 +618,7 @@ showdownClosed: false
 });
 await pushSystemMessage(
 currentRoomId,
-`🔔 に突入しました！\n子は「この基準で1位になる！」と思う最終ワードを1つ送信してください！`
+`🔔 決戦フェイズに突入しました！\n子は「この基準で1位になる！」と思う最終ワードを1つ送信してください！`
 );
 }
 
@@ -630,7 +630,7 @@ return alert("まだ誰も最終ワードを提出していません！");
 await roomRef.update({ showdownClosed: true});
 await pushSystemMessage(
 currentRoomId,
-`✂️ 親が最終ワードの提出を締め切りました！勝者を選んでいます…`
+`✂️ 親が最終ワードの提出を締め切りました！みんなの最終ワードが公開されました！`
 );
 }
 
@@ -640,12 +640,27 @@ if (!input) return;
 const text = input.value.trim();
 if (!text) return;
 
+const players = roomData.players || {};
+const childIds = Object.keys(players).filter(pid => pid !== roomData.parentId);
+const nextSubs = {
+...(roomData.finalSubmissions || {}),
+[myId]: {
+name: myName,
+text: text,
+ts: Date.now()
+}
+};
+const allSubmitted = childIds.length > 0 && childIds.every(pid => !!nextSubs[pid]);
+
 await db.ref(`rooms/${currentRoomId}/finalSubmissions/${myId}`).set({
 name: myName,
 text: text,
 ts: Date.now()
 });
 await pushSystemMessage(currentRoomId, `📩 ${myName} さんが最終ワードをセットしました！`);
+if (allSubmitted) {
+await pushSystemMessage(currentRoomId, `✨ 全員の最終ワードが出揃いました！みんなの回答をチェックしよう！`);
+}
 }
 
 async function selectShowdownWinner(winnerPlayerId) {
@@ -727,6 +742,49 @@ ts: Date.now()
     }
 
     // =========================================================================
+    // 最終ワード公開判定＆一覧HTML生成
+    // =========================================================================
+    function getShowdownStatus(players, playerIds) {
+      const subs = roomData.finalSubmissions || {};
+      const submittedIds = Object.keys(subs).sort((a, b) => (subs[a].ts || 0) - (subs[b].ts || 0));
+      const childIds = playerIds.filter(pid => pid !== roomData.parentId);
+      const submittedCount = childIds.filter(pid => subs[pid]).length;
+      const allSubmitted = childIds.length > 0 && submittedCount >= childIds.length;
+      const isOpen = allSubmitted || !!roomData.showdownClosed || roomData.phase === "reveal";
+      return { subs, submittedIds, childIds, submittedCount, allSubmitted, isOpen };
+    }
+
+    function getFinalWordsBoardHtml(showdownInfo) {
+      const { subs, submittedIds, isOpen } = showdownInfo;
+      if (!isOpen || submittedIds.length === 0) return "";
+
+      return `
+        <div class="bg-rose-50/90 border-2 border-rose-300 rounded-xl p-2.5 space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-black text-rose-700">📣 みんなの最終ワード一覧</span>
+            <span class="text-[10px] font-bold text-rose-500">${submittedIds.length}件公開中</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            ${submittedIds.map(pid => {
+              const s = subs[pid];
+              const isWinner = roomData.winnerId === pid;
+              return `
+                <div class="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs ${
+                  isWinner
+                    ? "bg-amber-300/80 border border-amber-500 text-slate-900 font-black"
+                    : "bg-white border border-rose-200 text-slate-800 font-bold"
+                }">
+                  <span class="truncate">${isWinner ? "🏆 " : ""}『${escapeHtml(s.text)}』</span>
+                  <span class="text-[11px] text-slate-500 shrink-0">${escapeHtml(s.name)}</span>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    // =========================================================================
     // 画面描画ロジック
     // =========================================================================
     function renderAll() {
@@ -734,6 +792,7 @@ ts: Date.now()
       const players = roomData.players || {};
       const playerIds = Object.keys(players);
       const isParent = roomData.parentId === myId;
+      const showdownInfo = getShowdownStatus(players, playerIds);
 
       document.getElementById("header-player-count").textContent = `👥 ${playerIds.length}人`;
       const playersBar = document.getElementById("players-bar");
@@ -753,7 +812,9 @@ ts: Date.now()
 
       const statusPanel = document.getElementById("status-panel");
       if (roomData.phase === "waiting") {
+        const finalBoard = getFinalWordsBoardHtml(showdownInfo);
         statusPanel.innerHTML = `
+          ${finalBoard}
           <div class="text-center py-1">
             <p class="text-xs font-bold text-slate-500">次のラウンドの準備中</p>
             <p class="text-sm font-black text-slate-800 mt-0.5">下のボタンから「親」を決めてスタート！</p>
@@ -832,6 +893,8 @@ ts: Date.now()
             </div>
           `;
         }
+
+        html += getFinalWordsBoardHtml(showdownInfo);
         statusPanel.innerHTML = html;
       }
 
@@ -867,10 +930,10 @@ ts: Date.now()
         chatContainer.scrollTop = chatContainer.scrollHeight;
       }
 
-      renderBottomPanel(isParent, playerIds);
+      renderBottomPanel(isParent, playerIds, showdownInfo);
     }
 
-    function renderBottomPanel(isParent, playerIds) {
+    function renderBottomPanel(isParent, playerIds, showdownInfo) {
       const bottom = document.getElementById("bottom-panel");
 
       if (roomData.phase === "waiting") {
@@ -937,35 +1000,40 @@ ts: Date.now()
             `;
           }
         } else {
+          // 子の入力フォームは既存要素を維持し、入力中の文字を消さない
           const isLocked = !!roomData.pendingWord;
-          bottom.innerHTML = `
-            <form onsubmit="event.preventDefault(); sendCandidateWord();" class="flex gap-2">
-              <input id="word-input" type="text" maxlength="25" ${isLocked ? "disabled" : ""}
-                placeholder="${isLocked ? "親が判定中..." : "単語を入力して送信！"}"
-                class="flex-1 px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-base disabled:bg-slate-100 select-text" />
-              <button type="submit" ${isLocked ? "disabled" : ""}
-                class="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-black px-5 py-3 rounded-xl shadow transition shrink-0">
-                送信
-              </button>
-            </form>
-          `;
+          const existingForm = document.getElementById("candidate-form");
+          const existingInput = document.getElementById("word-input");
+          const existingBtn = document.getElementById("candidate-submit-btn");
+          if (existingForm && existingInput && existingBtn) {
+            existingInput.disabled = isLocked;
+            existingInput.placeholder = isLocked ? "親が判定中..." : "単語を入力して送信！";
+            existingBtn.disabled = isLocked;
+          } else {
+            bottom.innerHTML = `
+              <form id="candidate-form" onsubmit="event.preventDefault(); sendCandidateWord();" class="flex gap-2">
+                <input id="word-input" type="text" maxlength="25" ${isLocked ? "disabled" : ""}
+                  placeholder="${isLocked ? "親が判定中..." : "単語を入力して送信！"}"
+                  class="flex-1 px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-base disabled:bg-slate-100 select-text" />
+                <button id="candidate-submit-btn" type="submit" ${isLocked ? "disabled" : ""}
+                  class="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-black px-5 py-3 rounded-xl shadow transition shrink-0">
+                  送信
+                </button>
+              </form>
+            `;
+          }
         }
         return;
       }
 
       if (roomData.phase === "showdown") {
-        const subs = roomData.finalSubmissions || {};
-        const submittedIds = Object.keys(subs);
-        const childIds = playerIds.filter(pid => pid !== roomData.parentId);
-        const submittedCount = childIds.filter(pid => subs[pid]).length;
-        const allSubmitted = childIds.length > 0 && submittedCount >= childIds.length;
-        const canPickWinner = allSubmitted || !!roomData.showdownClosed;
+        const { subs, submittedIds, childIds, submittedCount, isOpen } = showdownInfo;
 
         if (isParent) {
-          if (canPickWinner && submittedIds.length > 0) {
+          if (isOpen && submittedIds.length > 0) {
             bottom.innerHTML = `
               <div class="space-y-2 animate-pop">
-                <p class="text-xs font-black text-center text-rose-600">🎉 提出完了！基準に一番近い「優勝」をタップ！</p>
+                <p class="text-xs font-black text-center text-rose-600">🎉 最終ワード公開中！基準に一番近い「優勝」をタップ！</p>
                 <div class="grid grid-cols-1 gap-2 max-h-44 overflow-y-auto">
                   ${submittedIds.map(pid => {
                     const s = subs[pid];
@@ -996,7 +1064,11 @@ ts: Date.now()
             bottom.innerHTML = `
               <div class="text-center py-2.5 bg-indigo-50 rounded-xl border border-indigo-200">
                 <p class="text-xs font-bold text-indigo-800">✅ 提出完了：「${escapeHtml(subs[myId].text)}」</p>
-                <p class="text-[11px] text-slate-500 mt-0.5">他のメンバーの提出を待っています（${submittedCount}/${childIds.length}人）</p>
+                <p class="text-[11px] text-slate-500 mt-0.5">${
+                  isOpen
+                    ? "みんなの最終ワードが公開されました！親が勝者を選んでいます…"
+                    : `他のメンバーの提出を待っています（${submittedCount}/${childIds.length}人）`
+                }</p>
               </div>
             `;
           } else if (roomData.showdownClosed) {
@@ -1006,8 +1078,14 @@ ts: Date.now()
               </div>
             `;
           } else {
-            bottom.innerHTML = `
-              <form onsubmit="event.preventDefault(); submitFinalWord();" class="space-y-1.5">
+            // 最終ワード入力欄も既存要素を維持し、入力中の文字を消さない
+            const existingFinalForm = document.getElementById("final-form");
+            const existingFinalInput = document.getElementById("final-input");
+            if (existingFinalForm && existingFinalInput) {
+              // 入力中の文字・フォーカスを維持
+            } else {
+              bottom.innerHTML = `
+                <form id="final-form" onsubmit="event.preventDefault(); submitFinalWord();" class="space-y-1.5">
                 <p class="text-[11px] font-black text-rose-600">🔥 決戦！これが1位になると思うワードを1つ送信！</p>
                 <div class="flex gap-2">
                   <input id="final-input" type="text" maxlength="25" placeholder="最終回答を入力..."
@@ -1016,8 +1094,9 @@ ts: Date.now()
                     決定！
                   </button>
                 </div>
-              </form>
-            `;
+                </form>
+              `;
+            }
           }
         }
         return;
