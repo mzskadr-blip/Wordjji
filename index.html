@@ -145,7 +145,7 @@
     const db = firebase.database();
 
     // =========================================================================
-    // お題（基準50個）＆初期ワード（30セット）データ
+    // お題（基準70個：既存50個 + 通常10個 + 攻め10個）＆初期ワード（50セット）
     // =========================================================================
     const CRITERIA_LIST = [
       "無人島に1つだけ持っていくなら一番頼りになりそうなもの",
@@ -197,7 +197,31 @@
       "実は「食べようと思えば食べられる」気がする限界のもの",
       "コンビニのレジ横でホットスナックと一緒に売られていたらつい買っちゃうもの",
       "1000円札の肖像画になっていたら違和感があるもの",
-      "自分の葬式で流してほしいBGMのタイトルっぽい言葉"
+      "自分の葬式で流してほしいBGMのタイトルっぽい言葉",
+
+      // 追加：通常テイスト（10個）
+      "雨の日の休日に家でやると最高そうなもの",
+      "深夜2時に急に思い出して笑ってしまうもの",
+      "RPGの道具屋で980ゴールドくらいで売っていそうなもの",
+      "初めて会った人の第一印象を5秒で決めてしまいそうなもの",
+      "寒い日にコタツから出られなくなる理由になりそうなもの",
+      "旅行のパッキングでなぜか毎回入れてしまうもの",
+      "夏祭りの屋台にあったら行列ができそうなもの",
+      "小学生の自由研究のテーマにありそうな言葉",
+      "ちょっとだけ自慢したくなる小さな出来事・もの",
+      "カフェで隣の人から聞こえてきたら聞き耳を立ててしまう言葉",
+
+      // 追加：少し攻めたテイスト（10個）
+      "彼氏・彼女の部屋でこれを見つけたらそっとドアを閉めたくなるもの",
+      "LINEの誤爆で上司に送ってしまったら即座にスマホを投げたくなる言葉",
+      "合コンの自己紹介で最初に言うと場が凍りつく言葉",
+      "親に検索履歴を見られたら言い訳に困る言葉",
+      "飲み会の翌朝、財布と記憶と一緒に失くしがちなもの",
+      "「ごめんなさい、実は〇〇なんです」と告白されたらちょっと引くもの",
+      "マッチングアプリのプロフィールに書いてあったら警戒してしまう言葉",
+      "深夜テンションでノリで作ったグループLINEの名前っぽい言葉",
+      "ダイエット中に「これくらいならセーフ！」と自分に言い訳する言葉",
+      "大人になってから「あれ、昔はなんでカッコいいと思ってたんだろう…」となる言葉"
     ];
 
     const WORD_SETS = [
@@ -230,7 +254,29 @@
       ["図書館", "雷（かみなり）", "プリン"],
       ["マンホール", "探偵", "マフラー"],
       ["盆栽", "新幹線", "シャボン玉"],
-      ["秘密基地", "ヨーグルト", "博物館"]
+      ["秘密基地", "ヨーグルト", "博物館"],
+
+      // 追加20セット
+      ["かき氷", "ペンギン", "終電"],
+      ["おみくじ", "ナマケモノ", "花火大会"],
+      ["目覚まし時計", "クレオパトラ", "シュークリーム"],
+      ["防犯カメラ", "ハムスター", "かくれんぼ"],
+      ["温泉卵", "海賊", "パスポート"],
+      ["ブランコ", "タコ", "深夜ラジオ"],
+      ["宝くじ", "カメレオン", "おでん"],
+      ["鏡餅", "侍", "UFO"],
+      ["ルーレット", "フラミンゴ", "冷やし中華"],
+      ["歩道橋", "ゴブリン", "テスト勉強"],
+      ["水筒", "コアラ", "遊覧船"],
+      ["付箋", "シェイクスピア", "餃子"],
+      ["電柱", "イルカ", "初日の出"],
+      ["ハンコ", "ミイラ", "パフェ"],
+      ["滑り台", "チーター", "黒歴史"],
+      ["扇子", "仙人", "チャーハン"],
+      ["ポスト", "フクロウ", "タイムセール"],
+      ["靴下", "スフィンクス", "味噌汁"],
+      ["観葉植物", "白鳥", "ジャンケン"],
+      ["時計台", "吸血鬼", "焼き芋"]
     ];
 
 // =========================================================================
@@ -431,9 +477,11 @@ if (timerInterval) clearInterval(timerInterval);
 timerInterval = setInterval(updateTimerDisplay, 500);
 }
 
-function leaveRoom(skipConfirm = false) {
-if (!skipConfirm &&!confirm("ルームから退室しますか？（同じIDを入れればまた戻れます）")) return;
-if (roomRef) roomRef.off();
+function resetLocalViewToLobby() {
+if (roomRef) {
+roomRef.off();
+roomRef = null;
+}
 if (timerInterval) {
 clearInterval(timerInterval);
 timerInterval = null;
@@ -441,9 +489,75 @@ timerInterval = null;
 clearSavedSession();
 currentRoomId = "";
 roomData = null;
+myId = "";
 lastMsgCount = 0;
 document.getElementById("game-screen").classList.add("hidden");
 document.getElementById("lobby-screen").classList.remove("hidden");
+}
+
+async function leaveRoom(skipConfirm = false) {
+if (skipConfirm) {
+resetLocalViewToLobby();
+return;
+}
+if (!confirm("ルームから退室しますか？")) return;
+
+const targetRoomId = currentRoomId;
+const leavingPlayerId = myId;
+const leavingPlayerName = myName || (roomData && roomData.players && roomData.players[leavingPlayerId] && roomData.players[leavingPlayerId].name) || "参加者";
+
+resetLocalViewToLobby();
+
+if (!targetRoomId || !leavingPlayerId) return;
+
+try {
+const targetRef = db.ref(`rooms/${targetRoomId}`);
+const snap = await targetRef.once("value");
+if (!snap.exists()) return;
+
+const data = snap.val();
+const players = { ...(data.players || {}) };
+delete players[leavingPlayerId];
+
+const remainingIds = Object.keys(players);
+if (remainingIds.length === 0) {
+await targetRef.remove();
+return;
+}
+
+const updates = {
+[`players/${leavingPlayerId}`]: null
+};
+
+if (data.finalSubmissions && data.finalSubmissions[leavingPlayerId]) {
+updates[`finalSubmissions/${leavingPlayerId}`] = null;
+}
+
+if (data.pendingWord && data.pendingWord.authorId === leavingPlayerId) {
+updates.pendingWord = null;
+}
+
+const wasParentInActiveRound = data.parentId === leavingPlayerId && data.phase && data.phase !== "waiting";
+if (wasParentInActiveRound) {
+updates.phase = "waiting";
+updates.parentId = "";
+updates.championWord = "";
+updates.championAuthor = "";
+updates.pendingWord = null;
+updates.roundStartedAt = null;
+updates.finalSubmissions = {};
+updates.showdownClosed = false;
+updates.winnerId = "";
+}
+
+await targetRef.update(updates);
+await pushSystemMessage(targetRoomId, `👋 ${leavingPlayerName} さんが退室しました！`);
+if (wasParentInActiveRound) {
+await pushSystemMessage(targetRoomId, `🔄 親が退室したため、ラウンドをリセットしました。次の親を選んでね！`);
+}
+} catch (e) {
+console.warn("退室処理中にエラーが発生しましたが安全に終了しました:", e);
+}
 }
 
 function copyRoomId() {
