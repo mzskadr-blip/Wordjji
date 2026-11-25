@@ -394,6 +394,7 @@ phase: "waiting",
 parentId: "",
 criterion: "",
 initialWords: [],
+initialPick: "",
 championWord: "",
 championAuthor: "",
 pendingWord: null,
@@ -542,6 +543,7 @@ if (wasParentInActiveRound) {
 updates.phase = "waiting";
 updates.parentId = "";
 updates.championWord = "";
+updates.initialPick = "";
 updates.championAuthor = "";
 updates.pendingWord = null;
 updates.roundStartedAt = null;
@@ -622,6 +624,7 @@ phase: "initial_pick",
 parentId: myId,
 criterion: cPick.item,
 initialWords: wPick.item,
+initialPick: "",
 championWord: "",
 championAuthor: "",
 pendingWord: null,
@@ -659,6 +662,7 @@ await roomRef.update({
 phase: "playing",
 championWord: word,
 championAuthor: "初期カード",
+initialPick: word,
 roundStartedAt: Date.now()
 });
 await pushSystemMessage(
@@ -980,7 +984,7 @@ ts: Date.now()
               <span class="text-[10px] font-bold text-slate-500 block">🃏 初期カード（3択）</span>
               <div class="grid grid-cols-3 gap-1.5">
                 ${initWords.map(w => {
-                  const isSelected = w === roomData.championWord;
+                  const isSelected = w === roomData.initialPick;
                   return `
                     <div class="px-2 py-1 rounded-lg text-xs font-black text-center truncate ${
                       isSelected
